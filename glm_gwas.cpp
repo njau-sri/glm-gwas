@@ -1,3 +1,4 @@
+#include <cmath>
 #include <limits>
 #include <numeric>
 #include <fstream>
@@ -23,6 +24,7 @@ struct Parameter
     std::string pheno;
     std::string covar;
     std::string out;
+    bool openmp = false;
 } par ;
 
 template<typename T>
@@ -178,6 +180,151 @@ int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<
     double dfe0 = 0, sse0 = 0;
     lsfit(y, x0, b, dfe0, sse0);
 
+    std::vector<allele_t> g1;
+    std::vector< std::pair<allele_t,allele_t> > g2;
+
+    std::vector<double> x, y2;
+
+    for (size_t j = 0; j < m; ++j) {
+        std::vector<size_t> idx;
+        std::vector< std::vector<double> > x1;
+
+        if (gt.ploidy == 1) {
+            g1.clear();
+            for (size_t i = 0; i < n; ++i) {
+                auto ii = static_cast<size_t>(gi[i]);
+                auto a = gt.dat[j][ii];
+                if ( a ) {
+                    g1.push_back(a);
+                    idx.push_back(i);
+                }
+            }
+            idummy2(factor(g1), x1);
+        }
+        else {
+            g2.clear();
+            for (size_t i = 0; i < n; ++i) {
+                auto ii = static_cast<size_t>(gi[i]);
+                auto a = gt.dat[j][ii*2];
+                auto b = gt.dat[j][ii*2+1];
+                if ( a && b ) {
+                    if (a > b)
+                        std::swap(a, b);
+                    g2.emplace_back(a, b);
+                    idx.push_back(i);
+                }
+            }
+            idummy2(factor(g2), x1);
+        }
+
+        if ( x1.empty() )
+            continue;
+
+        auto n2 = idx.size();
+
+        auto jsst = sst;
+        auto jdfe0 = dfe0;
+        auto jsse0 = sse0;
+
+        if (n2 == n) {
+            y2 = y;
+            x = x0;
+        }
+        else {
+            y2 = subset(y, idx);
+
+            jsst = calc_css(y2);
+
+            x.assign(n2, 1);
+            for (auto &e : ac) {
+                auto z = subset(e, idx);
+                x.insert(x.end(), z.begin(), z.end());
+            }
+
+            lsfit(y2, x, b, jdfe0, jsse0);
+        }
+
+        for (auto &e : x1)
+            x.insert(x.end(), e.begin(), e.end());
+
+        double jdfe1 = 0, jsse1 = 0;
+        lsfit(y2, x, b, jdfe1, jsse1);
+
+        auto dfx = jdfe0 - jdfe1;
+        auto ssx = jsse0 - jsse1;
+
+        if ( ic.empty() ) {
+            if (dfx > 0 && ssx > 0 && jdfe1 > 0 && jsse1 > 0) {
+                auto f = (ssx / dfx) / (jsse1 / jdfe1);
+                res[0][j] = fpval(f, dfx, jdfe1);
+                res[1][j] = ssx / jsst;
+            }
+        }
+        else {
+            for (auto &e : x1) {
+                for (auto z : ic) {
+                    if (n2 != n)
+                        z = subset(z, idx);
+                    std::transform(e.begin(), e.end(), z.begin(), z.begin(),
+                                   std::multiplies<double>());
+                    x.insert(x.end(), z.begin(), z.end());
+                }
+            }
+
+            double jdfe2 = 0, jsse2 = 0;
+            lsfit(y2, x, b, jdfe2, jsse2);
+
+            auto dfm = jdfe0 - jdfe2;
+            auto ssm = jsse0 - jsse2;
+
+            if (dfm > 0 && ssm > 0 && jdfe2 > 0 && jsse2 > 0) {
+                auto f = (ssm / dfm) / (jsse2 / jdfe2);
+                res[0][j] = fpval(f, dfm, jdfe2);
+                res[1][j] = ssm / jsst;
+            }
+
+            if (dfx > 0 && ssx > 0 && jdfe2 > 0 && jsse2 > 0) {
+                auto f = (ssx / dfx) / (jsse2 / jdfe2);
+                res[2][j] = fpval(f, dfx, jdfe2);
+                res[3][j] = ssx / jsst;
+            }
+
+            auto dfxi = jdfe1 - jdfe2;
+            auto ssxi = jsse1 - jsse2;
+
+            if (dfxi > 0 && ssxi > 0 && jdfe2 > 0 && jsse2 > 0) {
+                auto f = (ssxi / dfxi) / (jsse2 / jdfe2);
+                res[4][j] = fpval(f, dfxi, jdfe2);
+                res[5][j] = ssxi / jsst;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int assoc_glm_omp(const Genotype &gt, const std::vector<int> &gi, const std::vector<double> &y,
+                  const std::vector< std::vector<double> > &ac,
+                  const std::vector< std::vector<double> > &ic,
+                  std::vector< std::vector<double> > &res)
+{
+    auto n = y.size();
+    auto m = gt.dat.size();
+
+    // modelP, modelR2, mainP, mainR2, intP, intR2
+    res.assign(ic.empty() ? 2 : 6, std::vector<double>(m, std::numeric_limits<double>::quiet_NaN()));
+
+    double sst = calc_css(y);
+
+    std::vector<double> x0(n, 1);
+    for (auto &v : ac)
+        x0.insert(x0.end(), v.begin(), v.end());
+
+    std::vector<double> b0;
+    double dfe0 = 0, sse0 = 0;
+    lsfit(y, x0, b0, dfe0, sse0);
+
+    #pragma omp parallel for schedule(static)
     for (size_t j = 0; j < m; ++j) {
         std::vector<size_t> idx;
         std::vector< std::vector<double> > x1;
@@ -219,7 +366,7 @@ int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<
         auto jdfe0 = dfe0;
         auto jsse0 = sse0;
 
-        std::vector<double> x, y2;
+        std::vector<double> x, y2, b;
 
         if (n2 == n) {
             y2 = y;
@@ -310,6 +457,7 @@ int glm_gwas(int argc, char *argv[])
     cmd.add("--pheno", "phenotype file", "");
     cmd.add("--covar", "covariate file", "");
     cmd.add("--out", "output file", "glm-gwas.out");
+    cmd.add("--openmp", "enable OpenMP multithreading");
 
     cmd.parse(argc, argv);
 
@@ -322,6 +470,7 @@ int glm_gwas(int argc, char *argv[])
     par.pheno = cmd.get("--pheno");
     par.covar = cmd.get("--covar");
     par.out = cmd.get("--out");
+    par.openmp = cmd.has("--openmp");
 
     Genotype gt;
     Phenotype pt;
@@ -380,7 +529,12 @@ int glm_gwas(int argc, char *argv[])
         }
 
         std::vector< std::vector<double> > z;
-        assoc_glm(gt, gi2, y, ac2, ic2, z);
+
+        if (par.openmp)
+            assoc_glm_omp(gt, gi2, y, ac2, ic2, z);
+        else
+            assoc_glm(gt, gi2, y, ac2, ic2, z);
+
         res.insert(res.end(), z.begin(), z.end());
     }
 
