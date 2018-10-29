@@ -225,8 +225,7 @@ int assoc_glm(const Genotype &gt, const std::vector<size_t> &gi, const std::vect
                 for (auto z : ic) {
                     if (n2 != n)
                         z = subset(z, idx);
-                    std::transform(e.begin(), e.end(), z.begin(), z.begin(),
-                                   std::multiplies<double>());
+                    std::transform(e.begin(), e.end(), z.begin(), z.begin(), std::multiplies<double>());
                     x.insert(x.end(), z.begin(), z.end());
                 }
             }
