@@ -15,7 +15,8 @@ SOURCES += \
     lsfit.cpp \
     pheno.cpp \
     statsutil.cpp \
-    vcf.cpp
+    vcf.cpp \
+    util.cpp
 
 HEADERS += \
     cmdline.h \
@@ -24,4 +25,5 @@ HEADERS += \
     pheno.h \
     split.h \
     statsutil.h \
-    vcf.h
+    vcf.h \
+    util.h

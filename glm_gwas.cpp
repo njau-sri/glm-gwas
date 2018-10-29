@@ -11,12 +11,14 @@
 #include "pheno.h"
 #include "statsutil.h"
 #include "lsfit.h"
+#include "util.h"
 
 
 using std::size_t;
 
 
 namespace {
+
 
 struct Parameter
 {
@@ -27,48 +29,8 @@ struct Parameter
     bool openmp = false;
 } par ;
 
-template<typename T>
-std::vector<T> intersect(std::vector<T> a, std::vector<T> b)
-{
-    std::sort(a.begin(), a.end());
-    std::sort(b.begin(), b.end());
 
-    std::vector<T> c;
-
-    std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(c));
-
-    return c;
-}
-
-template<typename T1, typename T2>
-std::vector<T1> subset(const std::vector<T1> &vec, const std::vector<T2> &idx)
-{
-    std::vector<T1> out;
-
-    out.reserve(idx.size());
-    for (auto i : idx)
-        out.push_back(vec[i]);
-
-    return out;
-}
-
-template<typename T>
-std::vector<T> subset(const std::vector<T> &vec, const std::vector<char> &mask)
-{
-    std::vector<T> out;
-
-    out.reserve( std::count(mask.begin(), mask.end(), 1) );
-
-    auto n = vec.size();
-    for (size_t i = 0; i < n; ++i) {
-        if ( mask[i] )
-            out.push_back(vec[i]);
-    }
-
-    return out;
-}
-
-void filter_ind(const std::vector<int> &idx, Phenotype &pt)
+void filter_ind(const std::vector<size_t> &idx, Phenotype &pt)
 {
     subset(pt.ind,idx).swap(pt.ind);
 
@@ -82,7 +44,7 @@ void filter_ind(const std::vector<int> &idx, Phenotype &pt)
         subset(e,idx).swap(e);
 }
 
-void filter_ind(const std::vector<int> &idx, Covariate &ct)
+void filter_ind(const std::vector<size_t> &idx, Covariate &ct)
 {
     subset(ct.ind,idx).swap(ct.ind);
 
@@ -90,7 +52,7 @@ void filter_ind(const std::vector<int> &idx, Covariate &ct)
         subset(e,idx).swap(e);
 }
 
-void merge(Genotype &gt, Phenotype &pt, Covariate &ct, std::vector<int> &gi)
+void merge(Genotype &gt, Phenotype &pt, Covariate &ct, std::vector<size_t> &gi)
 {
     bool docovar = ! ct.phe.empty() && ! ct.ind.empty();
 
@@ -110,18 +72,16 @@ void merge(Genotype &gt, Phenotype &pt, Covariate &ct, std::vector<int> &gi)
     if ( docovar )
         ind = intersect(ind, ct.ind);
 
-    std::vector<int> pi, ci;
     gi.clear();
+    std::vector<size_t> pi, ci;
 
-    for (auto itr = pt.ind.begin(); itr != pt.ind.end(); ++itr) {
-        if ( std::binary_search(ind.begin(), ind.end(), *itr) ) {
-            pi.push_back( itr - pt.ind.begin() );
-            if ( docovar ) {
-                auto itr2 = std::find(ct.ind.begin(), ct.ind.end(), *itr);
-                ci.push_back(itr2 - ct.ind.begin());
-            }
-            auto itr3 = std::find(gt.ind.begin(), gt.ind.end(), *itr);
-            gi.push_back(itr3 - gt.ind.begin());
+    auto n = pt.ind.size();
+    for (size_t i = 0; i < n; ++i) {
+        if ( std::binary_search(ind.begin(), ind.end(), pt.ind[i]) ) {
+            pi.push_back(i);
+            gi.push_back( index(gt.ind, pt.ind[i]) );
+            if ( docovar )
+                ci.push_back( index(ct.ind, pt.ind[i]) );
         }
     }
 
@@ -159,7 +119,7 @@ void parse_envblk(const Phenotype &pt, std::vector< std::vector<double> > &ac, s
     }
 }
 
-int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<double> &y,
+int assoc_glm(const Genotype &gt, const std::vector<size_t> &gi, const std::vector<double> &y,
               const std::vector< std::vector<double> > &ac,
               const std::vector< std::vector<double> > &ic,
               std::vector< std::vector<double> > &res)
@@ -192,7 +152,7 @@ int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<
         if (gt.ploidy == 1) {
             g1.clear();
             for (size_t i = 0; i < n; ++i) {
-                auto ii = static_cast<size_t>(gi[i]);
+                auto ii = gi[i];
                 auto a = gt.dat[j][ii];
                 if ( a ) {
                     g1.push_back(a);
@@ -204,7 +164,7 @@ int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<
         else {
             g2.clear();
             for (size_t i = 0; i < n; ++i) {
-                auto ii = static_cast<size_t>(gi[i]);
+                auto ii = gi[i];
                 auto a = gt.dat[j][ii*2];
                 auto b = gt.dat[j][ii*2+1];
                 if ( a && b ) {
@@ -303,7 +263,7 @@ int assoc_glm(const Genotype &gt, const std::vector<int> &gi, const std::vector<
     return 0;
 }
 
-int assoc_glm_omp(const Genotype &gt, const std::vector<int> &gi, const std::vector<double> &y,
+int assoc_glm_omp(const Genotype &gt, const std::vector<size_t> &gi, const std::vector<double> &y,
                   const std::vector< std::vector<double> > &ac,
                   const std::vector< std::vector<double> > &ic,
                   std::vector< std::vector<double> > &res)
@@ -332,7 +292,7 @@ int assoc_glm_omp(const Genotype &gt, const std::vector<int> &gi, const std::vec
         if (gt.ploidy == 1) {
             std::vector<allele_t> g;
             for (size_t i = 0; i < n; ++i) {
-                auto ii = static_cast<size_t>(gi[i]);
+                auto ii = gi[i];
                 auto a = gt.dat[j][ii];
                 if ( a ) {
                     g.push_back(a);
@@ -344,7 +304,7 @@ int assoc_glm_omp(const Genotype &gt, const std::vector<int> &gi, const std::vec
         else {
             std::vector< std::pair<allele_t,allele_t> > g;
             for (size_t i = 0; i < n; ++i) {
-                auto ii = static_cast<size_t>(gi[i]);
+                auto ii = gi[i];
                 auto a = gt.dat[j][ii*2];
                 auto b = gt.dat[j][ii*2+1];
                 if ( a && b ) {
@@ -493,7 +453,7 @@ int glm_gwas(int argc, char *argv[])
         std::cerr << "INFO: " << ct.ind.size() << " individuals, " << ct.phe.size() << " covariates\n";
     }
 
-    std::vector<int> gi;
+    std::vector<size_t> gi;
     merge(gt, pt, ct, gi);
 
     if ( gi.empty() ) {
