@@ -283,7 +283,7 @@ int assoc_glm_omp(const Genotype &gt, const std::vector<size_t> &gi, const std::
     double dfe0 = 0, sse0 = 0;
     lsfit(y, x0, b0, dfe0, sse0);
 
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for
     for (size_t j = 0; j < m; ++j) {
         std::vector<size_t> idx;
         std::vector< std::vector<double> > x1;
