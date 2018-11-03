@@ -14,6 +14,7 @@
 #include "util.h"
 
 
+using std::ptrdiff_t;
 using std::size_t;
 
 
@@ -283,8 +284,13 @@ int assoc_glm_omp(const Genotype &gt, const std::vector<size_t> &gi, const std::
     double dfe0 = 0, sse0 = 0;
     lsfit(y, x0, b0, dfe0, sse0);
 
+    // in earlier OpenMP specifications (<3.0), unsigned integer is not allowed in loop construct
+    auto m2 = static_cast<ptrdiff_t>(m);
+
     #pragma omp parallel for
-    for (size_t j = 0; j < m; ++j) {
+    for (ptrdiff_t j2 = 0; j2 < m2; ++j2) {
+        auto j = static_cast<size_t>(j2);
+
         std::vector<size_t> idx;
         std::vector< std::vector<double> > x1;
 
